@@ -156,20 +156,39 @@ async function createFallbackResponse(query: string, category: string, durationM
   const encoded = encodeURIComponent(query);
   const googleDirectUrl = `https://www.google.com/search?q=${encoded}`;
 
-  let notice = '';
-  if (isQuotaExceeded) {
-    notice = 'CHROS is operating in high-speed web search index mode. Real-time verified web results from Google, Wikipedia, GitHub, and technical sources are available below.';
-  } else {
-    notice = 'CHROS has prepared instant search indexes for this query across verified web repositories.';
+  // Find top encyclopedia definition
+  const wikiResult = sources.find((s) => s.domain.includes('wikipedia.org'));
+  const ghResult = sources.find((s) => s.domain.includes('github.com'));
+  const hnResult = sources.find((s) => s.domain.includes('ycombinator.com'));
+
+  let summaryParts: string[] = [];
+
+  if (wikiResult && wikiResult.snippet && !wikiResult.snippet.includes('Wikipedia encyclopedia definition')) {
+    summaryParts.push(`**Definition**: ${wikiResult.snippet}`);
+  } else if (wikiResult) {
+    summaryParts.push(`**Primary Reference**: ${wikiResult.title} via Wikipedia encyclopedia index.`);
   }
 
-  const overview = `## Search Index: "${query}"\n\n${notice}\n\nUse keyboard navigation (\`j\`/\`k\`) or select any source below to jump directly to verified pages.`;
+  if (ghResult) {
+    summaryParts.push(`**Open Source Code**: [${ghResult.title}](${ghResult.url}) - ${ghResult.snippet}`);
+  }
+
+  if (hnResult) {
+    summaryParts.push(`**Community Discussions**: [${hnResult.title}](${hnResult.url}) - ${hnResult.snippet}`);
+  }
+
+  let overview = '';
+  if (summaryParts.length > 0) {
+    overview = `### Key Highlights for "${query}"\n\n` + summaryParts.map((p) => `- ${p}`).join('\n\n');
+  } else {
+    overview = `### Search Index for "${query}"\n\nDirect live search indexes gathered from Google, verified documentation, and web repositories. Browse the categorized results below or open Google directly.`;
+  }
 
   return {
     query,
     overview,
     sources,
-    webSearchQueries: [query, `${query} documentation`, `${query} overview`],
+    webSearchQueries: [query, `${query} documentation`, `${query} tutorial`, `${query} examples`],
     googleDirectUrl,
     category,
     grounded: false,
