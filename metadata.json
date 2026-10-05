@@ -1,0 +1,6 @@
+{
+  "name": "CHROS - Minimalist Fast Search Engine",
+  "description": "Lightning-fast, distraction-free search engine powered by Google Search grounding with keyboard shortcuts, real-time trends, customizable categories, and ephemeral privacy mode.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

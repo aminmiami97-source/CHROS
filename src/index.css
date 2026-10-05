@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, kbd, pre, .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+/* OLED Black Mode support */
+html.theme-oled,
+html.theme-oled body {
+  background-color: #000000 !important;
+  color: #f3f4f6 !important;
+}
+
+html.theme-oled .oled-bg {
+  background-color: #000000 !important;
+}
+
+html.theme-oled .oled-surface {
+  background-color: #080808 !important;
+  border-color: #1f1f1f !important;
+}
+
+html.theme-oled .oled-border {
+  border-color: #1a1a1a !important;
+}
+
+/* Subtle scrollbars for sleek distraction-free look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(150, 150, 150, 0.2);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, 0.4);
+}
+
+/* Hardware accelerated transitions without layout shifts */
+.will-change-transform {
+  will-change: transform, opacity;
+}
