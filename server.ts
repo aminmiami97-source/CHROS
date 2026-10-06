@@ -429,7 +429,10 @@ Ensure you cite facts accurately and maintain a clean, high-density format with 
   // Vite middleware in dev or static files in production
   if (!isProd) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

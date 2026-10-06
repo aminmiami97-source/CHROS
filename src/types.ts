@@ -50,3 +50,14 @@ export interface HistoryItem {
   timestamp: number;
   resultsCount: number;
 }
+
+export interface SavedItem {
+  id: string;
+  userId?: string;
+  title: string;
+  url: string;
+  domain: string;
+  snippet?: string;
+  query?: string;
+  timestamp: number;
+}

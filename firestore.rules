@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation for User Profile
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['userId', 'email'])
+        && data.keys().hasOnly(['userId', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.userId is string && data.userId == request.auth.uid
+        && data.email is string && data.email.size() <= 256
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512));
+    }
+
+    // Validation for Search History Item
+    function isValidHistoryItem(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'query', 'category', 'timestamp'])
+        && data.keys().hasOnly(['id', 'userId', 'query', 'category', 'resultsCount', 'timestamp'])
+        && data.id is string && data.id.size() <= 128
+        && data.userId is string && data.userId == userId && data.userId == request.auth.uid
+        && data.query is string && data.query.size() <= 500
+        && data.category is string && data.category.size() <= 64
+        && data.timestamp is number
+        && (!('resultsCount' in data) || data.resultsCount is number);
+    }
+
+    // Validation for Saved/Bookmarked Result
+    function isValidSavedResult(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'url', 'domain', 'timestamp'])
+        && data.keys().hasOnly(['id', 'userId', 'title', 'url', 'domain', 'snippet', 'query', 'timestamp'])
+        && data.id is string && data.id.size() <= 128
+        && data.userId is string && data.userId == userId && data.userId == request.auth.uid
+        && data.title is string && data.title.size() <= 300
+        && data.url is string && data.url.size() <= 1000
+        && data.domain is string && data.domain.size() <= 128
+        && data.timestamp is number
+        && (!('snippet' in data) || (data.snippet is string && data.snippet.size() <= 1000))
+        && (!('query' in data) || (data.query is string && data.query.size() <= 500));
+    }
+
+    // Connection testing doc
+    match /test/{testId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Users Collection & Subcollections
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Disallow querying user lists to protect PII
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming())
+        && incoming().userId == existing().userId;
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // User Search History subcollection
+      match /history/{historyId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(historyId) && isValidHistoryItem(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(historyId) && isValidHistoryItem(incoming(), userId)
+          && incoming().userId == existing().userId;
+        allow delete: if isOwner(userId) && isValidId(historyId);
+      }
+
+      // User Saved Bookmarks subcollection
+      match /saved/{savedId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(savedId) && isValidSavedResult(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(savedId) && isValidSavedResult(incoming(), userId)
+          && incoming().userId == existing().userId;
+        allow delete: if isOwner(userId) && isValidId(savedId);
+      }
+    }
+  }
+}

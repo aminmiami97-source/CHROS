@@ -16,7 +16,9 @@ import {
   MessageSquare,
   FileText,
   Layers,
-  Link2
+  Link2,
+  Bookmark,
+  BookmarkCheck
 } from 'lucide-react';
 
 interface SearchResultsProps {
@@ -24,6 +26,8 @@ interface SearchResultsProps {
   selectedSourceIndex: number;
   onSelectSourceIndex: (idx: number) => void;
   onExecuteRelated: (query: string) => void;
+  savedUrls?: Set<string>;
+  onToggleSaveResult?: (source: SearchSource) => void;
 }
 
 // Helper to determine the source category, icon, and badge style
@@ -85,6 +89,8 @@ export const SearchResults: React.FC<SearchResultsProps> = ({
   selectedSourceIndex,
   onSelectSourceIndex,
   onExecuteRelated,
+  savedUrls,
+  onToggleSaveResult,
 }) => {
   const [copiedOverview, setCopiedOverview] = useState(false);
   const [copiedLinkIndex, setCopiedLinkIndex] = useState<number | null>(null);
@@ -400,6 +406,28 @@ export const SearchResults: React.FC<SearchResultsProps> = ({
 
                   {/* Actions & Status */}
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {onToggleSaveResult && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onToggleSaveResult(source);
+                        }}
+                        className={`p-1 rounded transition-colors ${
+                          savedUrls?.has(source.url)
+                            ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40'
+                            : 'text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800'
+                        }`}
+                        title={savedUrls?.has(source.url) ? 'Remove Bookmark' : 'Save to Research'}
+                      >
+                        {savedUrls?.has(source.url) ? (
+                          <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Bookmark className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    )}
+
                     <button
                       onClick={(e) => handleCopyLink(e, source.url, index)}
                       className="p-1 text-neutral-500 hover:text-neutral-200 rounded transition-colors"

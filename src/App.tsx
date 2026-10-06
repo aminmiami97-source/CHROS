@@ -4,7 +4,9 @@ import {
   SearchResponse, 
   SearchCategory, 
   SearchTrend, 
-  HistoryItem 
+  HistoryItem,
+  SavedItem,
+  SearchSource 
 } from './types';
 import { DEFAULT_CATEGORIES } from './constants';
 import { Header } from './components/Header';
@@ -15,9 +17,29 @@ import { SearchResults } from './components/SearchResults';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { CategorySettingsModal } from './components/CategorySettingsModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
-import { Zap, Command, ShieldCheck, Sparkles } from 'lucide-react';
+import { DownloadDesktopModal } from './components/DownloadDesktopModal';
+import { DownloadScreen } from './components/DownloadScreen';
+import { 
+  auth, 
+  db, 
+  signInWithGoogle, 
+  logOut, 
+  testFirestoreConnection, 
+  syncHistoryItemToFirestore,
+  saveResultToFirestore,
+  deleteSavedResultFromFirestore,
+  handleFirestoreError,
+  OperationType 
+} from './firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { collection, query as firestoreQuery, orderBy, limit, getDocs } from 'firebase/firestore';
+import { Zap, Command, ShieldCheck, Sparkles, Cloud } from 'lucide-react';
 
 export default function App() {
+  // Auth state
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+
   // Theme state
   const [theme, setTheme] = useState<ThemeMode>(() => {
     return (localStorage.getItem('chros_theme') as ThemeMode) || 'dark';
@@ -71,13 +93,76 @@ export default function App() {
     }
   });
 
+  // Saved bookmarks state
+  const [savedItems, setSavedItems] = useState<SavedItem[]>(() => {
+    try {
+      const local = localStorage.getItem('chros_saved_items');
+      return local ? JSON.parse(local) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Modals state
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isCategoriesOpen, setIsCategoriesOpen] = useState<boolean>(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [isDownloadDesktopOpen, setIsDownloadDesktopOpen] = useState<boolean>(false);
+  const [isDownloadScreen, setIsDownloadScreen] = useState<boolean>(false);
+  const [showPopupBlockedModal, setShowPopupBlockedModal] = useState<boolean>(false);
 
   // References
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Google OAuth sign-in wrapper with popup blocked detection
+  const handleSignInGoogle = async () => {
+    setIsAuthLoading(true);
+    try {
+      const res = await signInWithGoogle();
+      if (res?.error === 'popup-blocked') {
+        setShowPopupBlockedModal(true);
+      }
+    } catch {
+      // Gracefully handled inside signInWithGoogle
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  // Test connection and listen to Firebase auth
+  useEffect(() => {
+    testFirestoreConnection();
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      setIsAuthLoading(false);
+
+      // If user is authenticated and not in ephemeral mode, load remote history and saved items
+      if (currentUser && !ephemeralMode) {
+        try {
+          const historyRef = collection(db, 'users', currentUser.uid, 'history');
+          const qHistory = firestoreQuery(historyRef, orderBy('timestamp', 'desc'), limit(40));
+          const historySnapshot = await getDocs(qHistory);
+          if (!historySnapshot.empty) {
+            const remoteItems: HistoryItem[] = historySnapshot.docs.map((docSnap) => docSnap.data() as HistoryItem);
+            setHistory(remoteItems);
+          }
+
+          const savedRef = collection(db, 'users', currentUser.uid, 'saved');
+          const qSaved = firestoreQuery(savedRef, orderBy('timestamp', 'desc'), limit(50));
+          const savedSnapshot = await getDocs(qSaved);
+          if (!savedSnapshot.empty) {
+            const remoteSaved: SavedItem[] = savedSnapshot.docs.map((docSnap) => docSnap.data() as SavedItem);
+            setSavedItems(remoteSaved);
+          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.GET, `users/${currentUser.uid}/data`);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [ephemeralMode]);
 
   // Apply theme to HTML root element
   useEffect(() => {
@@ -106,7 +191,7 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [ephemeralMode]);
 
-  // Sync history to storage
+  // Sync history to storage and Firebase if logged in
   const saveHistoryItem = useCallback((searchQ: string, catId: string, count: number) => {
     const newItem: HistoryItem = {
       id: `h_${Date.now()}`,
@@ -124,16 +209,70 @@ export default function App() {
         sessionStorage.setItem('chros_session_history', JSON.stringify(updated));
       } else {
         localStorage.setItem('chros_history', JSON.stringify(updated));
+        // Sync to Firestore if authenticated
+        if (user) {
+          syncHistoryItemToFirestore(user.uid, newItem);
+        }
       }
       return updated;
     });
-  }, [ephemeralMode]);
+  }, [ephemeralMode, user]);
 
   const handleClearHistory = () => {
     setHistory([]);
     sessionStorage.removeItem('chros_session_history');
     localStorage.removeItem('chros_history');
   };
+
+  // Memoized set of saved URLs for instant O(1) lookup
+  const savedUrls = React.useMemo(() => new Set(savedItems.map((s) => s.url)), [savedItems]);
+
+  const handleToggleSaveResult = useCallback(async (source: SearchSource) => {
+    const isAlreadySaved = savedUrls.has(source.url);
+    if (isAlreadySaved) {
+      const itemToDelete = savedItems.find((s) => s.url === source.url);
+      if (itemToDelete) {
+        setSavedItems((prev) => {
+          const next = prev.filter((s) => s.url !== source.url);
+          localStorage.setItem('chros_saved_items', JSON.stringify(next));
+          return next;
+        });
+        if (user && !ephemeralMode) {
+          await deleteSavedResultFromFirestore(user.uid, itemToDelete.id);
+        }
+      }
+    } else {
+      const newItem: SavedItem = {
+        id: `s_${Date.now()}`,
+        userId: user?.uid,
+        title: source.title,
+        url: source.url,
+        domain: source.domain,
+        snippet: source.snippet || '',
+        query: query || '',
+        timestamp: Date.now(),
+      };
+      setSavedItems((prev) => {
+        const next = [newItem, ...prev];
+        localStorage.setItem('chros_saved_items', JSON.stringify(next));
+        return next;
+      });
+      if (user && !ephemeralMode) {
+        await saveResultToFirestore(user.uid, newItem);
+      }
+    }
+  }, [savedUrls, savedItems, user, ephemeralMode, query]);
+
+  const handleDeleteSavedItem = useCallback(async (id: string) => {
+    setSavedItems((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      localStorage.setItem('chros_saved_items', JSON.stringify(next));
+      return next;
+    });
+    if (user && !ephemeralMode) {
+      await deleteSavedResultFromFirestore(user.uid, id);
+    }
+  }, [user, ephemeralMode]);
 
   // Fetch Trends
   const fetchTrends = useCallback(async () => {
@@ -351,6 +490,11 @@ export default function App() {
 
   const hasSearched = Boolean(searchResult);
 
+  // If user navigated to the dedicated Windows 11 & 10 Download Screen
+  if (isDownloadScreen) {
+    return <DownloadScreen onBackToSearch={() => setIsDownloadScreen(false)} />;
+  }
+
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-150 ${
       theme === 'oled' 
@@ -370,7 +514,12 @@ export default function App() {
           onOpenShortcuts={() => setIsShortcutsOpen(true)}
           onOpenCategories={() => setIsCategoriesOpen(true)}
           onOpenHistory={() => setIsHistoryOpen(true)}
+          onOpenDownloadDesktop={() => setIsDownloadScreen(true)}
           onLogoClick={handleResetHome}
+          user={user}
+          onSignInGoogle={handleSignInGoogle}
+          onSignOut={logOut}
+          isAuthLoading={isAuthLoading}
           compact={hasSearched}
         />
 
@@ -483,6 +632,8 @@ export default function App() {
                   setQuery(rq);
                   handleExecuteSearch(rq);
                 }}
+                savedUrls={savedUrls}
+                onToggleSaveResult={handleToggleSaveResult}
               />
             )}
           </div>
@@ -495,14 +646,27 @@ export default function App() {
           <span>CHROS Engine</span>
           <span>·</span>
           <span>Google Grounding</span>
-          {ephemeralMode && (
+          {user ? (
+            <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-cyan-400">
+              <Cloud className="w-3 h-3" />
+              <span>Firebase Synced</span>
+            </span>
+          ) : ephemeralMode ? (
             <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-emerald-400">
               <ShieldCheck className="w-3 h-3" />
               Ephemeral Session
             </span>
-          )}
+          ) : null}
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsDownloadScreen(true)}
+            className="hover:text-emerald-400 text-neutral-400 transition-colors flex items-center gap-1.5"
+            title="Download for Windows 11 & 10 PC / Laptop (Native App, No Terminal)"
+          >
+            <span>Windows 11 &amp; 10 App</span>
+          </button>
+          <span>·</span>
           <button
             onClick={() => setIsShortcutsOpen(true)}
             className="hover:text-neutral-300 transition-colors flex items-center gap-1"
@@ -514,6 +678,11 @@ export default function App() {
       </footer>
 
       {/* Modals & Drawers */}
+      <DownloadDesktopModal
+        isOpen={isDownloadDesktopOpen}
+        onClose={() => setIsDownloadDesktopOpen(false)}
+      />
+
       <ShortcutsModal
         isOpen={isShortcutsOpen}
         onClose={() => setIsShortcutsOpen(false)}
@@ -530,13 +699,58 @@ export default function App() {
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         history={history}
+        savedItems={savedItems}
         ephemeralMode={ephemeralMode}
+        isLoggedIn={Boolean(user)}
         onSelectQuery={(q) => {
           setQuery(q);
           handleExecuteSearch(q);
         }}
         onClearHistory={handleClearHistory}
+        onDeleteSavedItem={handleDeleteSavedItem}
       />
+
+      {/* Pop-up Blocked Guidance Modal */}
+      {showPopupBlockedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="relative w-full max-w-md rounded-xl border border-amber-800/80 bg-neutral-900 shadow-2xl p-5 sm:p-6 text-neutral-200 animate-in fade-in zoom-in-95 duration-100">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-neutral-800 text-amber-400 font-mono text-sm font-semibold">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+              <span>Google Sign-In Pop-up Blocked</span>
+            </div>
+
+            <div className="my-4 text-xs font-sans text-neutral-300 space-y-3 leading-relaxed">
+              <p>
+                Your browser or iframe preview environment automatically blocked the Google OAuth window.
+              </p>
+              <div className="bg-neutral-950/60 p-3 rounded-lg border border-neutral-800 space-y-1.5 font-mono text-[11px] text-neutral-400">
+                <div className="text-neutral-200 font-semibold">How to enable:</div>
+                <div>1. Look for the pop-up blocked icon in your browser address bar (top right).</div>
+                <div>2. Select <span className="text-amber-300">&ldquo;Always allow pop-ups from this site&rdquo;</span>.</div>
+                <div>3. Click Retry Sign In below.</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+              <button
+                onClick={() => setShowPopupBlockedModal(false)}
+                className="px-3 py-1.5 rounded text-xs font-mono text-neutral-400 hover:text-neutral-200 transition-colors"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  setShowPopupBlockedModal(false);
+                  handleSignInGoogle();
+                }}
+                className="px-3.5 py-1.5 rounded text-xs font-mono bg-amber-500 hover:bg-amber-400 text-neutral-950 font-semibold transition-colors"
+              >
+                Retry Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
